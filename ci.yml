@@ -1,0 +1,162 @@
+stages:
+  - lint
+
+variables:
+  PYTHON_VERSION: "3.11"
+  RUFF_VERSION: "0.4.2"
+  # Минимальное соотношение строк к ошибкам (100:1)
+  MIN_RATIO: 100
+
+# Основной job для проверки соотношения
+check-ruff-ratio:
+  stage: lint
+  image: python:${PYTHON_VERSION}-slim
+
+  before_script:
+    - python --version
+    - pip install --upgrade pip
+    - pip install ruff==${RUFF_VERSION}
+    - pip install jq  # Для парсинга JSON
+
+  script:
+    # Получаем количество строк в MR (изменения)
+    - |
+      if [ -n "$CI_MERGE_REQUEST_IID" ]; then
+        echo "Merge Request detected: $CI_MERGE_REQUEST_IID"
+        
+        # Для GitLab.com или self-hosted с API
+        # Получаем информацию о MR через API GitLab
+        MR_DATA=$(curl --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+          "$CI_API_V4_URL/projects/$CI_PROJECT_ID/merge_requests/$CI_MERGE_REQUEST_IID" 2>/dev/null || echo "")
+        
+        if [ -n "$MR_DATA" ]; then
+          # Парсим additions из JSON ответа
+          ADDITIONS=$(echo $MR_DATA | python3 -c "import sys, json; print(json.load(sys.stdin).get('additions', 0))")
+        else
+          # Альтернативный метод: считаем добавленные строки из diff
+          ADDITIONS=$(git diff --shortstat origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME... 2>/dev/null | grep -o '[0-9]* insertions' | grep -o '[0-9]*' || echo "0")
+        fi
+        
+        # Если не удалось получить additions, используем общее количество строк в измененных файлах
+        if [ -z "$ADDITIONS" ] || [ "$ADDITIONS" = "0" ]; then
+          ADDITIONS=$(find . -name "*.py" -type f -exec wc -l {} + | tail -1 | awk '{print $1}')
+          echo "Using total lines in .py files: $ADDITIONS"
+        fi
+      else
+        # Если не MR, считаем все строки в проекте
+        ADDITIONS=$(find . -name "*.py" -type f -exec wc -l {} + | tail -1 | awk '{print $1}')
+        echo "Not an MR, using total lines in .py files: $ADDITIONS"
+      fi
+      
+      echo "Lines in MR/Project: $ADDITIONS"
+      
+      # Записываем в переменную для использования в артефактах
+      echo "ADDITIONS=$ADDITIONS" > build.env
+
+    # Запускаем ruff и получаем только ошибки категории E в JSON формате
+    - |
+      # Запускаем ruff check с выводом в JSON
+      ruff check --output-format=json . > ruff_output.json || true
+      
+      # Фильтруем только ошибки категории E (pycodestyle errors)
+      E_ERRORS=$(python3 -c "
+import json
+try:
+    with open('ruff_output.json', 'r') as f:
+        data = json.load(f)
+    e_errors = [issue for issue in data.get('results', []) 
+                if issue.get('code', '').startswith('E')]
+    print(len(e_errors))
+except:
+    print(0)
+")
+      
+      echo "Number of E category errors: $E_ERRORS"
+      
+      # Проверяем, что у нас есть строки для анализа
+      if [ "$ADDITIONS" -eq "0" ]; then
+        echo "ERROR: No lines to analyze!"
+        exit 1
+      fi
+      
+      # Рассчитываем соотношение
+      RATIO=$(python3 -c "
+additions = $ADDITIONS
+errors = $E_ERRORS
+if errors == 0:
+    ratio = float('inf')
+else:
+    ratio = additions / errors
+print(f'{ratio:.2f}')
+")
+      
+      echo "Lines to errors ratio: $RATIO:1 (minimum required: $MIN_RATIO:1)"
+      
+      # Проверяем соотношение
+      if [ "$E_ERRORS" -eq "0" ]; then
+        echo "✅ No E category errors found! Perfect!"
+        exit 0
+      elif [ $(python3 -c "print(1 if $ADDITIONS / $E_ERRORS >= $MIN_RATIO else 0)") -eq 1 ]; then
+        echo "✅ Ratio check PASSED: ${ADDITIONS}:${E_ERRORS} >= ${MIN_RATIO}:1"
+      else
+        echo "❌ Ratio check FAILED: ${ADDITIONS}:${E_ERRORS} < ${MIN_RATIO}:1"
+        echo "You need to fix E category errors or add more lines to achieve ratio ${MIN_RATIO}:1"
+        
+        # Показываем топ ошибок
+        echo ""
+        echo "Top E category errors found:"
+        python3 -c "
+import json
+from collections import Counter
+
+try:
+    with open('ruff_output.json', 'r') as f:
+        data = json.load(f)
+
+    e_errors = [issue for issue in data.get('results', []) 
+                if issue.get('code', '').startswith('E')]
+    
+    # Группируем по типу ошибки
+    error_counts = Counter(issue['code'] for issue in e_errors)
+
+    print('Error type : Count')
+    print('-' * 30)
+    for error_type, count in error_counts.most_common(10):
+        print(f'{error_type:10} : {count}')
+        
+    # Показываем примеры
+    if e_errors:
+        print('')
+        print('Sample errors:')
+        for i, error in enumerate(e_errors[:5]):
+            print(f'{i+1}. {error[\"code\"]}: {error[\"message\"]}')
+            print(f'   File: {error[\"location\"][\"file\"]}:{error[\"location\"][\"row\"]}')
+except:
+    pass
+"
+        exit 1
+      fi
+  
+  artifacts:
+    reports:
+      dotenv: build.env
+    paths:
+      - ruff_output.json
+    expire_in: 1 week
+  
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_TAG'
+
+# Job для автофикса некоторых ошибок (опционально)
+autofix-ruff:
+  stage: lint
+  image: python:${PYTHON_VERSION}-slim
+  script:
+    - pip install ruff==${RUFF_VERSION}
+    - ruff check --fix .
+    - ruff format .
+  rules:
+    - when: manual
+      allow_failure: true
