@@ -1,0 +1,33 @@
+stages:
+  - lint
+
+ruff-check:
+  stage: lint
+  image: python:3.11-slim
+  script:
+    - pip install ruff
+    - |
+      # Создаем временный файл для вывода
+      ruff check . --output-format=text > ruff_output.txt 2>&1
+      
+      # Ищем ошибки, начинающиеся с E
+      grep -E "^[^:]+\.py:[0-9]+:[0-9]+: E" ruff_output.txt > e_errors.txt || true
+      
+      # Проверяем, есть ли такие ошибки
+      if [ -s e_errors.txt ]; then
+        echo "❌ Ruff found errors starting with 'E':"
+        echo "======================================"
+        cat e_errors.txt
+        echo "======================================"
+        echo "Total E-errors found: $(wc -l < e_errors.txt)"
+        exit 1
+      else
+        echo "✅ No errors starting with 'E' found"
+        echo "Ruff output was:"
+        cat ruff_output.txt
+      fi
+  artifacts:
+    when: on_failure
+    paths:
+      - e_errors.txt
+      - ruff_output.txt
