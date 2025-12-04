@@ -1,0 +1,32 @@
+image: python:3.11-slim
+
+stages:
+  - lint
+
+cache:
+  key: "$CI_COMMIT_REF_SLUG"
+  paths:
+    - .venv/
+    - .cache/
+  policy: pull-push
+
+lint:
+  stage: lint
+  before_script:
+    # Устанавливаем uv если его нет
+    - pip install uv
+
+    # Создаем или используем кэшированное виртуальное окружение
+    - |
+      if [ ! -d ".venv" ]; then
+        uv venv .venv
+      fi
+      source .venv/bin/activate
+
+    # Устанавливаем зависимости через uv
+    - uv pip install ruff
+
+  script:
+    # Проверяем код
+    - ruff check .
+    - ruff format --check .
