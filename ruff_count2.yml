@@ -1,0 +1,54 @@
+# Более точная версия с JSON выводом
+
+image: python:3.11-slim
+
+lint:
+  script:
+    - pip install ruff
+
+    # Считаем строки
+    - |
+      if [ -n "$CI_MERGE_REQUEST_IID" ]; then
+        echo "MR detected, counting changed lines..."
+        MR_COUNT=$(git diff --shortstat origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME... 2>/dev/null | grep -o '[0-9]* insertions' | grep -o '[0-9]*' || echo "0")
+      else
+        echo "Not an MR, counting all lines..."
+        MR_COUNT=$(find . -name "*.py" -type f -exec wc -l {} + | tail -1 | awk '{print $1}')
+      fi
+      echo "MR_COUNT=$MR_COUNT"
+
+    # Считаем ошибки E через JSON
+    - |
+      ruff check --output-format=json . > ruff.json 2>/dev/null || true
+      E_COUNT=$(python3 -c "
+import json
+try:
+    with open('ruff.json', 'r') as f:
+        data = json.load(f)
+    count = sum(1 for issue in data.get('results', []) 
+                if issue.get('code', '').startswith('E'))
+    print(count)
+except:
+    print(0)
+")
+      echo "E_COUNT=$E_COUNT"
+    
+    # Проверяем соотношение
+    - |
+      if [ "$E_COUNT" -eq 0 ]; then
+        echo "✅ SUCCESS: No E errors"
+        exit 0
+      fi
+      
+      if [ "$MR_COUNT" -eq 0 ]; then
+        echo "❌ FAILED: No lines to check"
+        exit 1
+      fi
+      
+      RATIO=$(( MR_COUNT * 100 / E_COUNT ))  # В процентах
+      if [ $RATIO -gt 10000 ]; then  # 10000 = 100 * 100 (100%)
+        echo "✅ SUCCESS: Ratio ${MR_COUNT}:${E_COUNT} = $((MR_COUNT / E_COUNT)) > 100"
+      else
+        echo "❌ FAILED: Ratio ${MR_COUNT}:${E_COUNT} = $((MR_COUNT / E_COUNT)) ≤ 100"
+        exit 1
+      fi

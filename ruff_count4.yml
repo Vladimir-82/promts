@@ -1,0 +1,32 @@
+# Вариант с выводом ошибок при провале:
+
+image: python:3.11-slim
+
+lint:
+  script:
+    - pip install ruff
+
+    # 1. Количество строк
+    - MR_COUNT=$(find . -name "*.py" -type f -exec wc -l {} + | awk '{sum+=$1} END {print sum}')
+    echo "Total Python lines: $MR_COUNT"
+
+    # 2. Количество ошибок E
+    - E_COUNT=$(ruff check . 2>&1 | grep -E '^[[:space:]]*E[0-9]+' | wc -l)
+    echo "E errors: $E_COUNT"
+
+    # 3. Проверка
+    - |
+      if [ $E_COUNT -eq 0 ]; then
+        echo "✅ Perfect! No E errors"
+        exit 0
+      fi
+      
+      RATIO=$(( MR_COUNT / E_COUNT ))
+      if [ $RATIO -gt 100 ]; then
+        echo "✅ Ratio $MR_COUNT:$E_COUNT = $RATIO > 100"
+      else
+        echo "❌ FAILED: Ratio $MR_COUNT:$E_COUNT = $RATIO ≤ 100"
+        echo "E errors found:"
+        ruff check . 2>&1 | grep -E '^[[:space:]]*E[0-9]+' | head -10
+        exit 1
+      fi

@@ -1,0 +1,44 @@
+#
+
+image: python:3.11-slim
+
+lint:
+  script:
+    # Устанавливаем ruff
+    - pip install ruff
+
+    # 1. Считаем строки в MR (упрощенно)
+    - |
+      if [ -n "$CI_MERGE_REQUEST_IID" ]; then
+        # Для MR: считаем строки в измененных Python файлах
+        MR_COUNT=$(git diff --name-only origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME... | grep '\.py$' | xargs cat 2>/dev/null | wc -l || echo "0")
+      else
+        # Для обычного коммита: все Python файлы
+        MR_COUNT=$(find . -name "*.py" -type f -exec cat {} + | wc -l)
+      fi
+      echo "Lines count (MR_COUNT): $MR_COUNT"
+
+    # 2. Запускаем ruff и считаем ошибки категории E
+    - |
+      ruff check . > ruff_output.txt 2>&1 || true
+      E_COUNT=$(grep -c '^[A-Za-z/].*E[0-9]' ruff_output.txt || echo "0")
+      echo "E errors count (E_COUNT): $E_COUNT"
+
+    # 3. Проверяем соотношение
+    - |
+      if [ "$E_COUNT" -eq 0 ]; then
+        echo "✅ No E errors found!"
+        exit 0
+      fi
+      
+      # Рассчитываем соотношение
+      RATIO=$(( MR_COUNT / E_COUNT ))
+      echo "Ratio (lines/errors): $RATIO (need > 100)"
+      
+      if [ $RATIO -gt 100 ]; then
+        echo "✅ SUCCESS: Ratio $MR_COUNT:$E_COUNT = $RATIO > 100"
+      else
+        echo "❌ FAILED: Ratio $MR_COUNT:$E_COUNT = $RATIO ≤ 100"
+        echo "Fix E errors or add more lines!"
+        exit 1
+      fi

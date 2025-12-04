@@ -1,0 +1,21 @@
+# Самый минимальный вариант (3 команды)
+
+image: python:3.11-slim
+
+lint:
+  script:
+    # Устанавливаем
+    - pip install ruff
+
+    # Считаем строки (упрощенно)
+    - MR_COUNT=$(find . -name "*.py" -exec cat {} + | wc -l)
+
+    # Считаем ошибки E и проверяем
+    - |
+      E_COUNT=$(ruff check . 2>&1 | grep -c 'E[0-9]' || echo "0")
+      if [ $E_COUNT -eq 0 ] || [ $((MR_COUNT / E_COUNT)) -gt 100 ]; then
+        echo "✅ PASS"
+      else
+        echo "❌ FAIL"
+        exit 1
+      fi
