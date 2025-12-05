@@ -1,0 +1,64 @@
+# Более продвинутая версия с сохранением отчета в файл
+stages:
+  - lint
+
+variables:
+  PYTHON_VERSION: "3.11"
+
+ruff-lint:
+  stage: lint
+  image: python:${PYTHON_VERSION}-slim
+  before_script:
+    - python --version
+    - pip install --upgrade pip
+    - pip install ruff
+  script:
+    # Сохраняем полный отчет в файл (все категории)
+    - ruff check --output-file=ruff-full-report.json --output-format=json . || true
+
+    # Выводим удобочитаемый отчет в консоль
+    - echo "=========================================="
+    - echo "RUFF CODE ANALYSIS REPORT"
+    - echo "=========================================="
+
+    # Показываем все ошибки и предупреждения по категориям
+    - echo ""
+    - echo "1. Ошибки (E - критические):"
+    - ruff check --select=E --format=concise . || true
+
+    - echo ""
+    - echo "2. Предупреждения (W - warnings):"
+    - ruff check --select=W --format=concise . || true
+
+    - echo ""
+    - echo "3. Нарушения формата (F - format):"
+    - ruff check --select=F --format=concise . || true
+
+    - echo ""
+    - echo "4. Проверка импортов (I - import):"
+    - ruff check --select=I --format=concise . || true
+
+    - echo ""
+    - echo "=========================================="
+
+    # Финальная проверка - пайплайн упадет только если есть ошибки E
+    - echo "FINAL CHECK: Проверка на критические ошибки категории E..."
+    - if ruff check --select=E --quiet .; then
+        echo "✓ Успех: критические ошибки не найдены";
+      else
+        echo "✗ Ошибка: найдены критические ошибки (E)";
+        echo "Пайплайн завершится с ошибкой";
+        exit 1;
+      fi
+  cache:
+    paths:
+      - .cache/pip
+      - .cache/ruff
+    key: "${CI_COMMIT_REF_SLUG}-python-${PYTHON_VERSION}"
+  artifacts:
+    when: always
+    paths:
+      - ruff-full-report.json
+    reports:
+      codequality: ruff-full-report.json
+    expire_in: 1 week
