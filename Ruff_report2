@@ -1,0 +1,14 @@
+stages:
+  - lint
+
+ruff-check:
+  stage: lint
+  image: ghcr.io/astral-sh/ruff:latest
+  script:
+    # Генерируем отчет в формате GitLab Code Quality
+    - ruff check --select=E --output-format=gitlab --exit-non-zero-on-fix . > gl-code-quality-report.json
+  artifacts:
+    reports:
+      codequality: gl-code-quality-report.json
+  rules:
+    - if: $CI_MERGE_REQUEST_IID
