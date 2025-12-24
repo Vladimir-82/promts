@@ -1,0 +1,62 @@
+from abc import ABC, abstractmethod
+from typing import List
+
+# Интерфейс стратегии
+class SortStrategy(ABC):
+    @abstractmethod
+    def sort(self, data: List) -> List:
+        pass
+
+# Конкретные стратегии
+class BubbleSortStrategy(SortStrategy):
+    def sort(self, data: List) -> List:
+        print("Сортировка пузырьком")
+        # Упрощенная реализация
+        return sorted(data)
+
+class QuickSortStrategy(SortStrategy):
+    def sort(self, data: List) -> List:
+        print("Быстрая сортировка")
+        # Упрощенная реализация
+        return sorted(data)
+
+class MergeSortStrategy(SortStrategy):
+    def sort(self, data: List) -> List:
+        print("Сортировка слиянием")
+        # Упрощенная реализация
+        return sorted(data)
+
+# Контекст
+class Sorter:
+    def __init__(self, strategy: SortStrategy = None):
+        self._strategy = strategy
+
+    def set_strategy(self, strategy: SortStrategy):
+        self._strategy = strategy
+
+    def execute_sort(self, data: List) -> List:
+        if not self._strategy:
+            raise ValueError("Стратегия не задана")
+        return self._strategy.sort(data)
+
+# Использование
+def main_with_args():
+    data = [5, 2, 8, 1, 9, 3]
+    
+    sorter = Sorter()
+    
+    # Используем разные стратегии
+    sorter.set_strategy(BubbleSortStrategy())
+    result1 = sorter.execute_sort(data)
+    print(f"Результат 1: {result1}")
+    
+    sorter.set_strategy(QuickSortStrategy())
+    result2 = sorter.execute_sort(data)
+    print(f"Результат 2: {result2}")
+    
+    sorter.set_strategy(MergeSortStrategy())
+    result3 = sorter.execute_sort(data)
+    print(f"Результат 3: {result3}")
+
+if __name__ == "__main__":
+    main_with_args()
