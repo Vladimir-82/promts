@@ -1,0 +1,21 @@
+class RatingPermission(permissions.BasePermission):
+    def has_permission(self, request, view):
+        return request.user.is_authenticated
+    
+    def has_object_permission(self, request, view, obj):
+        user = request.user
+        
+        # Копируем логику из методов модели has_*_permission
+        if view.action == 'retrieve':
+            # Логика has_object_read_permission
+            return obj.can_user_read(user)
+        
+        if view.action in ['update', 'partial_update']:
+            # Логика has_object_write_permission
+            return obj.can_user_write(user)
+        
+        if view.action == 'destroy':
+            # Логика has_object_destroy_permission
+            return obj.can_user_delete(user)
+        
+        return False
