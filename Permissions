@@ -1,0 +1,48 @@
+# 1. Кастомное поле для сериализатора (замена DRYPermissionsField)
+class ObjectPermissionsField(serializers.SerializerMethodField):
+    def get_object_permissions(self, obj):
+        request = self.context.get('request')
+        if not request:
+            return {}
+        
+        return {
+            'can_read': True,  # Всегда можно читать (SAFE_METHODS)
+            'can_update': obj.author == request.user or request.user.is_staff,
+            'can_delete': obj.author == request.user or request.user.is_staff,
+        }
+
+# 2. Permission класс (замена DRYPermissions)
+class IsOwnerOrAdmin(permissions.BasePermission):
+    def has_permission(self, request, view):
+        # Разрешаем все для безопасных методов
+        if request.method in permissions.SAFE_METHODS:
+            return True
+        # Для остальных - только авторизованные
+        return request.user and request.user.is_authenticated
+    
+    def has_object_permission(self, request, view, obj):
+        # Разрешаем все для безопасных методов
+        if request.method in permissions.SAFE_METHODS:
+            return True
+        # Проверка владения или статуса персонала
+        return obj.author == request.user or request.user.is_staff
+
+# 3. Использование
+class ArticleSerializer(serializers.ModelSerializer):
+    permissions = ObjectPermissionsField()  # Было: DRYPermissionsField()
+    
+    class Meta:
+        model = Article
+        fields = '__all__'
+
+class ArticleViewSet(viewsets.ModelViewSet):
+    queryset = Article.objects.all()
+    serializer_class = ArticleSerializer
+    permission_classes = [IsOwnerOrAdmin]  # Было: DRYPermissions
+    
+    # Дополнительная фильтрация, если нужно
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_staff:
+            return Article.objects.all()
+        return Article.objects.filter(author=user)
