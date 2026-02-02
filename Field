@@ -1,0 +1,54 @@
+# permissions_mixin.py
+from rest_framework import serializers
+
+class PermissionsMixin:
+    """
+    Миксин для добавления поля permissions в любой сериализатор
+    """
+    permissions = serializers.SerializerMethodField()
+    
+    def get_permissions(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user:
+            return self.get_default_permissions()
+        
+        user = request.user
+        return {
+            'can_view': self.can_view(user, obj),
+            'can_edit': self.can_edit(user, obj),
+            'can_delete': self.can_delete(user, obj),
+            'can_create': self.can_create(user),
+        }
+    
+    def get_default_permissions(self):
+        return {
+            'can_view': False,
+            'can_edit': False,
+            'can_delete': False,
+            'can_create': False,
+        }
+    
+    def can_view(self, user, obj):
+        # Переопределите в конкретном сериализаторе при необходимости
+        return True
+    
+    def can_edit(self, user, obj):
+        # Базовый вариант - проверка Django permissions
+        if hasattr(user, 'has_perm'):
+            model_name = obj._meta.model_name if obj else self.Meta.model._meta.model_name
+            app_label = obj._meta.app_label if obj else self.Meta.model._meta.app_label
+            return user.has_perm(f'{app_label}.change_{model_name}')
+        return False
+    
+    def can_delete(self, user, obj):
+        if hasattr(user, 'has_perm'):
+            model_name = obj._meta.model_name if obj else self.Meta.model._meta.model_name
+            app_label = obj._meta.app_label if obj else self.Meta.model._meta.app_label
+            return user.has_perm(f'{app_label}.delete_{model_name}')
+        return False
+    
+    def can_create(self, user):
+        if hasattr(user, 'has_perm'):
+            model = self.Meta.model
+            return user.has_perm(f'{model._meta.app_label}.add_{model._meta.model_name}')
+        return False
