@@ -1,0 +1,65 @@
+# Вместо: permissions = DRYPermissionsField()
+# Используйте:
+
+from rest_framework import serializers
+
+class BaseModelSerializer(serializers.ModelSerializer):
+    permissions = serializers.SerializerMethodField()
+    
+    def get_permissions(self, obj):
+        """
+        Возвращает разрешенные действия в формате, похожем на DRYPermissions
+        """
+        request = self.context.get('request')
+        if not request or not request.user:
+            return {}
+        
+        user = request.user
+        
+        # Проверяем стандартные CRUD действия
+        return {
+            'read': self.has_read_permission(user, obj),
+            'create': self.has_create_permission(user, obj),
+            'update': self.has_update_permission(user, obj),
+            'delete': self.has_delete_permission(user, obj),
+        }
+    
+    def has_read_permission(self, user, obj):
+        """Можно ли читать объект"""
+        # Базовая реализация - все авторизованные могут читать
+        return user.is_authenticated
+    
+    def has_create_permission(self, user, obj):
+        """Можно ли создавать объекты"""
+        return user.is_authenticated
+    
+    def has_update_permission(self, user, obj):
+        """Можно ли обновлять объект"""
+        return user.is_authenticated
+    
+    def has_delete_permission(self, user, obj):
+        """Можно ли удалять объект"""
+        return user.is_authenticated
+
+# Использование:
+class RatingRateSerializer(BaseModelSerializer):
+    name = serializers.CharField(source='get_name_display', read_only=True)
+    
+    class Meta:
+        model = RatingRate
+        fields = '__all__'
+    
+    # Переопределяем при необходимости
+    def has_update_permission(self, user, obj):
+        # Пример: только владельцы могут редактировать
+        if hasattr(obj, 'owner'):
+            return obj.owner == user
+        return super().has_update_permission(user, obj)
+
+
+class RateSerializer(BaseModelSerializer):
+    name = serializers.CharField(source='get_name_display', read_only=True)
+    
+    class Meta:
+        model = Rate
+        fields = '__all__'ascg
