@@ -1,0 +1,17 @@
+from functools import wraps
+from rest_framework.request import Request
+
+def authenticated_users(func):
+    """
+    Улучшенный декоратор с поддержкой DRF Request.
+    """
+    @wraps(func)
+    def wrapper(request, *args, **kwargs):
+        # Проверяем тип request (может быть DRF Request или обычный HttpRequest)
+        user = getattr(request, 'user', None)
+        
+        if not user or not user.is_authenticated:
+            return False
+            
+        return func(request, *args, **kwargs)
+    return wrapper
