@@ -1,0 +1,8 @@
+# Применить 3 конкретных коммита
+git cherry-pick abc123 def456 ghi789
+
+# Применить все коммиты из ветки feature
+git cherry-pick develop..feature
+
+# Применить с сохранением оригинальных сообщений коммитов
+git cherry-pick -x commit1 commit2
