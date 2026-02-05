@@ -1,0 +1,53 @@
+from rest_framework import fields
+
+class SimpleDRYPermissionField(fields.Field):
+    """
+    Простая версия с основными permissions
+    """
+    
+    def __init__(self, **kwargs):
+        kwargs['read_only'] = True
+        super().__init__(**kwargs)
+    
+    def get_attribute(self, instance):
+        return instance
+    
+    def to_representation(self, obj):
+        request = self.context.get('request')
+        
+        if not request or not hasattr(request, 'user'):
+            return {}
+        
+        # Получаем модель
+        if hasattr(self.parent, 'Meta') and hasattr(self.parent.Meta, 'model'):
+            model = self.parent.Meta.model
+        elif obj:
+            model = type(obj)
+        else:
+            return {}
+        
+        permissions = {}
+        
+        # Только основные permissions
+        basic_permissions = ['read', 'write']
+        
+        for perm_name in basic_permissions:
+            global_method = f'has_{perm_name}_permission'
+            object_method = f'has_object_{perm_name}_permission'
+            
+            has_perm = False
+            
+            # Глобальная проверка
+            if hasattr(model, global_method) and callable(getattr(model, global_method)):
+                has_perm = getattr(model, global_method)(request)
+            
+            # Object-level проверка
+            if obj and has_perm:
+                if hasattr(obj, object_method) and callable(getattr(obj, object_method)):
+                    has_perm = getattr(obj, object_method)(request)
+                elif hasattr(model, object_method) and callable(getattr(model, object_method)):
+                    has_perm = getattr(model, object_method)(request, obj)
+            
+            permissions[perm_name] = has_perm
+        
+        return permissions
