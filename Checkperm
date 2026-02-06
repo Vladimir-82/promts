@@ -1,0 +1,56 @@
+class DRYPermissionsField(fields.Field):
+    """Добавление поля с permissions."""
+    
+    @ukatsiukevich
+    def __init__(self, **kwargs):
+        kwargs['read_only'] = True  # для исключения валидации
+        super().__init__(**kwargs)
+
+    def get_attribute(self, instance):
+        """Возвращает сам объект, чтобы использовать его в to_representation."""
+        return instance
+
+    def _check_permission(self, request, obj, model, perm_name):
+        """Проверяет разрешение для объекта и модели."""
+        global_method = f'has_{perm_name}_permission'
+        object_method = f'has_object_{perm_name}_permission'
+        
+        has_perm = False
+        
+        # Глобальная проверка
+        if getattr(model, global_method, None) and callable(getattr(model, global_method)):
+            has_perm = getattr(model, global_method)(request)
+        
+        # Object проверка
+        if obj and has_perm:
+            if getattr(obj, object_method, None) and callable(getattr(obj, object_method)):
+                has_perm = getattr(obj, object_method)(request)
+            elif getattr(model, object_method, None) and callable(getattr(model, object_method)):
+                has_perm = getattr(model, object_method)(request, obj)
+        
+        return has_perm
+
+    def to_representation(self, obj):
+        """Права доступа в представление."""
+        request = self.context.get('request')
+        if not request or not getattr(request, 'user', None):
+            return {}
+
+        # Получаем модель
+        if getattr(self.parent, 'Meta', None) and getattr(self.parent.Meta, 'model', None):
+            model = self.parent.Meta.model
+        elif obj:
+            model = type(obj)
+        else:
+            return {}
+
+        permissions = {}
+
+        # Только основные permissions
+        basic_permissions = ['read', 'write']
+
+        for perm_name in basic_permissions:
+            has_perm = self._check_permission(request, obj, model, perm_name)
+            permissions[perm_name] = has_perm
+        
+        return permissions
