@@ -1,0 +1,31 @@
+from rest_framework import serializers
+from .models import BondsTransactions, BondState
+
+
+class BondsTransactionsSerializer(serializers.ModelSerializer):
+    # Вычисляемое поле для отображения суммы overdue_rest и balance_current_account
+    rest_debt = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = BondsTransactions
+        fields = ['id', 'bond_state', 'rest_debt', ...]  # добавьте остальные поля
+        # или используйте '__all__' если нужны все поля
+        # fields = '__all__'
+    
+    def get_rest_debt(self, obj):
+        """
+        Метод для вычисления значения rest_debt
+        """
+        try:
+            # Проверяем, есть ли связанный объект BondState
+            if obj.bond_state:
+                bond_state = obj.bond_state
+                # Получаем значения полей, используя безопасный доступ
+                overdue_rest = getattr(bond_state, 'overdue_rest', 0) or 0
+                balance_current_account = getattr(bond_state, 'balance_current_account', 0) or 0
+                
+                # Суммируем значения
+                return overdue_rest + balance_current_account
+            return 0
+        except AttributeError:
+            return 0
