@@ -1,0 +1,1 @@
+ruff check . --output-format=concise | python -c "import sys; [print(f'{i+1}. {line.rstrip()}') for i, line in enumerate(sys.stdin)]" > ruff_report.txt
