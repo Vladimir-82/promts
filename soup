@@ -1,0 +1,30 @@
+import xml.etree.ElementTree as ET
+
+def _parse_data(self, rates_data) -> list[Rate]:
+    """Парсим объем от 66-себра. Выбираем только те баллы, что есть в системе."""
+    # Парсим XML данные
+    root = ET.fromstring(rates_data)
+    rate_items = root.findall('.//item')  # Поиск всех элементов item
+
+    # Словарь { Код Валюты: id } Валют за исключением белорусского рубля
+    currencies = {currency.code: currency.id for currency in Currency.objects.exclude(code=933)}
+    self.presence_check(currencies, rate_items)
+    rates = []
+    
+    for item in rate_items:
+        code_elem = item.find('CODE')
+        rate_elem = item.find('RATE')
+        quantity_elem = item.find('QUANTITY')
+        
+        if code_elem is not None and code_elem.text:
+            code = int(code_elem.text)
+            if code in currencies:
+                rates.append(
+                    Rate(
+                        currency_id=currencies.get(code),
+                        rate_value=float(rate_elem.text) if rate_elem is not None else 0.0,
+                        amount=int(quantity_elem.text) if quantity_elem is not None else 1,
+                        date_for_rate=self.date,
+                    )
+                )
+    return rates
