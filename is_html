@@ -1,0 +1,226 @@
+import re
+
+def is_html_document(text: str) -> bool:
+    """
+    Определяет, является ли строка HTML-документом.
+    
+    Поддерживает:
+    - HTML5 (с DOCTYPE или без)
+    - HTML 4.01 Strict/Transitional/Frameset
+    - XHTML 1.0/1.1
+    - HTML без явного DOCTYPE (quirks mode)
+    
+    Args:
+        text: строка для проверки
+        
+    Returns:
+        bool: True если это HTML-документ, False в противном случае
+    """
+    if not isinstance(text, str):
+        return False
+    
+    # Очищаем от начальных пробелов для проверки
+    text_stripped = text.lstrip()
+    
+    # 1. ПРОВЕРКА DOCTYPE (самый надежный признак)
+    
+    # HTML5 doctype
+    if text_stripped.lower().startswith('<!doctype html>'):
+        return True
+    
+    # HTML 4.01 doctypes
+    html4_doctypes = [
+        '<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN"',
+        '<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"',
+        '<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Frameset//EN"',
+    ]
+    
+    for doctype in html4_doctypes:
+        if text_stripped.upper().startswith(doctype):
+            return True
+    
+    # XHTML doctypes
+    xhtml_doctypes = [
+        '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN"',
+        '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"',
+        '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Frameset//EN"',
+        '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN"',
+    ]
+    
+    for doctype in xhtml_doctypes:
+        if text_stripped.upper().startswith(doctype):
+            return True
+    
+    # 2. ПРОВЕРКА НАЛИЧИЯ КОРНЕВЫХ ТЕГОВ
+    
+    # Приводим к нижнему регистру для поиска
+    text_lower = text.lower()
+    
+    # Проверка наличия тега <html> с возможными атрибутами
+    html_pattern = r'<html\b[^>]*>.*?</html>'
+    if re.search(html_pattern, text_lower, re.DOTALL):
+        # Дополнительная проверка: внутри html должен быть head или body
+        has_head = re.search(r'<head\b[^>]*>', text_lower)
+        has_body = re.search(r'<body\b[^>]*>', text_lower)
+        
+        if has_head or has_body:
+            return True
+    
+    # 3. ПРОВЕРКА СТРУКТУРЫ (head + body)
+    
+    # Ищем пары head/body (обязательные элементы HTML документа)
+    has_head_tag = re.search(r'<head\b[^>]*>.*?</head>', text_lower, re.DOTALL)
+    has_body_tag = re.search(r'<body\b[^>]*>.*?</body>', text_lower, re.DOTALL)
+    
+    if has_head_tag and has_body_tag:
+        return True
+    
+    # 4. ПРОВЕРКА МИНИМАЛЬНОГО HTML ДОКУМЕНТА
+    # (согласно спецификации, минимальный документ может содержать только title)
+    
+    # Ищем title внутри head или как отдельный элемент
+    title_pattern = r'<title\b[^>]*>.*?</title>'
+    has_title = re.search(title_pattern, text_lower, re.DOTALL)
+    
+    # Если есть title и есть хотя бы один структурный тег
+    if has_title:
+        # Проверяем наличие других структурных элементов
+        structural_tags = [
+            r'<html\b',
+            r'<head\b',
+            r'<body\b',
+            r'<div\b',
+            r'<p\b',
+            r'<h[1-6]\b',
+            r'<span\b',
+        ]
+        
+        for tag_pattern in structural_tags:
+            if re.search(tag_pattern, text_lower):
+                return True
+    
+    # 5. ПРОВЕРКА XML ПРОЛОГА (для XHTML)
+    if text_stripped.startswith('<?xml version=') and '?>' in text_stripped:
+        # После пролога должен быть DOCTYPE или html тег
+        after_prolog = text_stripped[text_stripped.find('?>') + 2:].lstrip()
+        if (after_prolog.lower().startswith('<!doctype') or 
+            after_prolog.lower().startswith('<html')):
+            return True
+    
+    # 6. ПРОВЕРКА НАЛИЧИЯ ТИПИЧНЫХ МЕТА-ТЕГОВ
+    meta_charset = re.search(r'<meta\s+charset\s*=', text_lower)
+    meta_http_equiv = re.search(r'<meta\s+http-equiv\s*=', text_lower)
+    
+    if meta_charset or meta_http_equiv:
+        # Если есть meta-теги, проверяем наличие других HTML элементов
+        other_tags = re.findall(r'<[a-z]+[>\s]', text_lower)
+        if len(other_tags) > 2:  # больше пары тегов
+            return True
+    
+    # 7. ПРОВЕРКА НАЛИЧИЯ ТЕГОВ, ХАРАКТЕРНЫХ ТОЛЬКО ДЛЯ HTML
+    html_specific = [
+        r'<!\-\-.*?\-\->',  # комментарии
+        r'<!\s*\[CDATA\[',   # CDATA секции
+        r'&nbsp;',           # HTML entities
+        r'&copy;',
+        r'&amp;',
+    ]
+    
+    for pattern in html_specific:
+        if re.search(pattern, text_lower):
+            # Если нашли HTML-специфичные конструкции, проверяем наличие тегов
+            if re.search(r'<[a-z]+[>\s]', text_lower):
+                return True
+    
+    return False
+
+
+def is_html_document_detailed(text: str) -> tuple[bool, str]:
+    """
+    Расширенная версия с указанием причины определения.
+    
+    Returns:
+        tuple[bool, str]: (является ли HTML, причина определения)
+    """
+    if not isinstance(text, str):
+        return False, "Не строка"
+    
+    text_stripped = text.lstrip()
+    text_lower = text.lower()
+    
+    # Проверки по порядку
+    if text_stripped.lower().startswith('<!doctype html>'):
+        return True, "HTML5 DOCTYPE"
+    
+    html4_doctypes = [
+        'HTML 4.01 Strict',
+        'HTML 4.01 Transitional',
+        'HTML 4.01 Frameset',
+    ]
+    
+    for dt in html4_doctypes:
+        if dt.replace(' ', '_').upper() in text_stripped.upper():
+            return True, f"HTML4 DOCTYPE ({dt})"
+    
+    if re.search(r'<html\b[^>]*>.*?</html>', text_lower, re.DOTALL):
+        if re.search(r'<head\b', text_lower) or re.search(r'<body\b', text_lower):
+            return True, "Корневой тег <html> с структурой"
+    
+    if (re.search(r'<head\b[^>]*>.*?</head>', text_lower, re.DOTALL) and
+        re.search(r'<body\b[^>]*>.*?</body>', text_lower, re.DOTALL)):
+        return True, "Полная структура head + body"
+    
+    if re.search(r'<title\b[^>]*>.*?</title>', text_lower, re.DOTALL):
+        if re.search(r'<[a-z]+[>\s]', text_lower):
+            return True, "Минимальный документ с title"
+    
+    if text_stripped.startswith('<?xml') and '?>' in text_stripped:
+        after_prolog = text_stripped[text_stripped.find('?>') + 2:].lstrip()
+        if after_prolog.lower().startswith('<!doctype') or after_prolog.lower().startswith('<html'):
+            return True, "XHTML с XML прологом"
+    
+    return False, "Не обнаружено признаков HTML документа"
+
+
+# Примеры использования и тесты
+if __name__ == "__main__":
+    test_cases = [
+        # HTML5 документы
+        ("<!DOCTYPE html>\n<html><head><title>Test</title></head><body></body></html>", True),
+        ("<!doctype html><html><body>Hello</body></html>", True),
+        
+        # HTML4 документы
+        ('<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd">\n<html><head><title>Test</title></head><body></body></html>', True),
+        
+        # XHTML
+        ('<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">\n<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Test</title></head><body></body></html>', True),
+        
+        # Минимальный HTML (quirks mode)
+        ("<html><body>Hello</body></html>", True),
+        ("<head><title>Test</title></head><body>Content</body>", True),
+        
+        # Фрагменты HTML (не документы)
+        ("<p>Просто параграф</p>", False),
+        ("<div>Текст в диве</div>", False),
+        ("<b>жирный текст</b>", False),
+        
+        # Не HTML
+        ("Просто текст без тегов", False),
+        ("{ 'json': 'data' }", False),
+        ("<nothtml>custom tag</nothtml>", False),  # Произвольный тег без структуры
+        
+        # Граничные случаи
+        ("<html>незакрытый тег", False),  # Незакрытый тег без структуры
+        ("   <!DOCTYPE html>   <html>", True),  # С пробелами в начале
+    ]
+    
+    for text, expected in test_cases:
+        result = is_html_document(text)
+        detailed_result, reason = is_html_document_detailed(text)
+        print(f"Ожидается: {expected}")
+        print(f"Результат: {result} ({reason})")
+        print(f"Текст: {text[:50]}...")
+        print("-" * 50)
+        assert result == expected, f"Ошибка! Ожидалось {expected}, получено {result}"
+    
+    print("Все тесты пройдены!")
