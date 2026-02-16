@@ -1,0 +1,38 @@
+import re
+
+def _parse_data(self, rates_data) -> list[Rate]:
+    """Парсим объем от 66-себра. Выбираем только те баллы, что есть в системе."""
+    # Находим все блоки item
+    item_pattern = r'<item>(.*?)</item>'
+    code_pattern = r'<CODE>(.*?)</CODE>'
+    rate_pattern = r'<RATE>(.*?)</RATE>'
+    quantity_pattern = r'<QUANTITY>(.*?)</QUANTITY>'
+    
+    items = re.findall(item_pattern, rates_data, re.DOTALL)
+    
+    # Словарь { Код Валюты: id } Валют за исключением белорусского рубля
+    currencies = {currency.code: currency.id for currency in Currency.objects.exclude(code=933)}
+    self.presence_check(currencies, items)
+    rates = []
+    
+    for item in items:
+        code_match = re.search(code_pattern, item)
+        rate_match = re.search(rate_pattern, item)
+        quantity_match = re.search(quantity_pattern, item)
+        
+        if code_match and code_match.group(1):
+            try:
+                code = int(code_match.group(1).strip())
+                if code in currencies:
+                    rates.append(
+                        Rate(
+                            currency_id=currencies.get(code),
+                            rate_value=float(rate_match.group(1).strip()) if rate_match and rate_match.group(1) else 0.0,
+                            amount=int(quantity_match.group(1).strip()) if quantity_match and quantity_match.group(1) else 1,
+                            date_for_rate=self.date,
+                        )
+                    )
+            except (ValueError, AttributeError):
+                continue
+                
+    return rates
