@@ -1,0 +1,9 @@
+# Для Pandas 1.4.1 и 2.3.3 (работает одинаково в обеих версиях)
+for row_number in [1, 16, 25]:
+    empty_row = pd.DataFrame([[''] * width], columns=self.df.columns)
+    self.df = pd.concat([self.df.iloc[:row_number], empty_row, self.df.iloc[row_number:]], ignore_index=True)
+
+if self.is_rating:
+    for row_number in [33, 51]:
+        empty_row = pd.DataFrame([[''] * width], columns=self.df.columns)
+        self.df = pd.concat([self.df.iloc[:row_number], empty_row, self.df.iloc[row_number:]], ignore_index=True)
