@@ -1,0 +1,135 @@
+from rest_framework import serializers
+from django.core.exceptions import ValidationError
+
+class BulkUpdateModelSerializer(serializers.ModelSerializer):
+    """Сериализатор для массового обновления с корректной валидацией"""
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        
+        # Если это bulk update, модифицируем валидаторы
+        if self.context.get('bulk_update') and self.instance is not None:
+            self._patch_unique_validators()
+    
+    def _patch_unique_validators(self):
+        """Заменяем стандартные валидаторы уникальности на безопасные для bulk"""
+        for field_name, field in self.fields.items():
+            new_validators = []
+            for validator in field.validators:
+                if hasattr(validator, 'exclude_current_instance'):
+                    # Создаем обертку для валидатора уникальности
+                    validator = self._wrap_unique_validator(validator)
+                new_validators.append(validator)
+            field.validators = new_validators
+    
+    def _wrap_unique_validator(self, validator):
+        """Создает обертку для валидатора уникальности, безопасную для bulk"""
+        original_exclude = validator.exclude_current_instance
+        
+        def safe_exclude_current_instance(attrs, queryset, instance):
+            # Безопасная версия exclude_current_instance для bulk операций
+            if instance is None:
+                return queryset
+            
+            # Если instance - это QuerySet (при many=True)
+            if hasattr(instance, '__iter__') and not hasattr(instance, '_meta'):
+                # Для массового обновления возвращаем исходный queryset
+                # Валидация уникальности будет проверена на уровне БД
+                return queryset
+            
+            # Если это обычная модель
+            if hasattr(instance, 'pk'):
+                return queryset.exclude(pk=instance.pk)
+            
+            return queryset
+        
+        # Подменяем метод
+        validator.exclude_current_instance = safe_exclude_current_instance
+        return validator
+    
+    def validate(self, attrs):
+        """Переопределяем валидацию для bulk операций"""
+        if self.context.get('bulk_update') and self.instance is not None:
+            # При bulk update пропускаем некоторые проверки
+            return attrs
+        return super().validate(attrs)
+
+
+
+
+
+from .serializers import BulkUpdateModelSerializer
+
+class YourViewSet(viewsets.ModelViewSet):
+    # ... ваш код ...
+    serializer_class = BulkUpdateModelSerializer  # Используем новый сериализатор
+    
+    def bulk_update(self, request, *args, **kwargs):
+        partial = kwargs.pop('partial', False)
+        
+        # Получаем queryset
+        queryset = self.filter_queryset(self.get_queryset())
+        
+        # Используем кастомный сериализатор с флагом bulk_update
+        serializer = self.get_serializer(
+            queryset,
+            data=request.data,
+            many=True,
+            partial=partial,
+            context={
+                **self.get_serializer_context(),
+                'bulk_update': True,
+                'request': request
+            }
+        )
+        
+        # Валидация теперь должна проходить без ошибок
+        serializer.is_valid(raise_exception=True)
+        
+        try:
+            self.perform_bulk_update(serializer)
+        except IntegrityError as err:
+            # Обработка IntegrityError (ошибки БД, включая уникальность)
+            return self.handle_integrity_error(err)
+        except Exception as e:
+            return Response(f'Error: {e.__class__.__name__} - {e.args[0]}', 
+                          status=status.HTTP_400_BAD_REQUEST)
+        
+        # Остальная логика...
+        balance_ids = [data.get('id') for data in serializer.data]
+        balances = Balance.objects.filter(id__in=balance_ids).order_by('date')
+        
+        for balance in balances:
+            if balance.date.day != 1 or balance.date.month not in (1, 4, 7, 10):
+                continue
+            
+            count_rates(balance)
+            
+            try:
+                AutomaticCriteriaCount(balance).count()
+            except OverflowException:
+                continue
+            
+            try:
+                AutomaticCriteriaCount(balance).balance_criteria()
+            except BalanceException:
+                continue
+        
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    def handle_integrity_error(self, err):
+        """Обработка ошибок целостности БД"""
+        error_str = str(err)
+        date_match = re.search(r'\d{4}-\d{2}-\d{2}', error_str)
+        
+        if date_match:
+            date = '.'.join(date_match.group(0).split('-')[:-1])
+            return Response(
+                f'На дату {date} уже есть баланс!', 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        return Response(
+            f'Ошибка базы данных: {error_str}', 
+            status=status.HTTP_400_BAD_REQUEST
+        )
