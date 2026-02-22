@@ -1,0 +1,11 @@
+class MyModelSerializer(serializers.ModelSerializer):
+    def validate_email(self, value):
+        if self.instance:
+            # При обновлении исключаем текущий объект
+            if MyModel.objects.filter(email=value).exclude(pk=self.instance.pk).exists():
+                raise serializers.ValidationError("Email already exists")
+        else:
+            # При создании обычная проверка
+            if MyModel.objects.filter(email=value).exists():
+                raise serializers.ValidationError("Email already exists")
+        return value
