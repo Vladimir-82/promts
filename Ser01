@@ -1,0 +1,7 @@
+class CustomBulkSerializerMixin(BulkSerializerMixin):
+    
+    def get_unique_together_validators(self):
+        """Игнорируем unique_together валидаторы для bulk операций"""
+        if self.context.get('request') and self.context['request'].method in ['PUT', 'PATCH']:
+            return []
+        return super().get_unique_together_validators()
