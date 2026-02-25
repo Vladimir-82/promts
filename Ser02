@@ -1,0 +1,26 @@
+from rest_framework_bulk import BulkSerializerMixin, BulkListSerializer
+from rest_framework.validators import UniqueTogetherValidator
+
+class Django42CompatibleBulkSerializerMixin(BulkSerializerMixin):
+    """
+    Миксин для совместимости с Django 4.2+ при использовании bulk операций
+    """
+    
+    def get_unique_together_validators(self):
+        """
+        Переопределяем валидаторы unique_together для работы с bulk операциями
+        в Django 4.2+
+        """
+        if hasattr(self, 'instance') and isinstance(self.instance, list):
+            # Для bulk операций возвращаем пустой список валидаторов
+            return []
+        return super().get_unique_together_validators()
+
+
+class BalanceBulkSerializer(Django42CompatibleBulkSerializerMixin, serializers.ModelSerializer):
+    
+    class Meta:
+        model = Balance
+        fields = '__all__'  # исправлено с '_all_' на '__all__'
+        read_only_fields = ('block_reason',)
+        list_serializer_class = BulkListSerializer
