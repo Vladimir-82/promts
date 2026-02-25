@@ -1,0 +1,17 @@
+from rest_framework_bulk import BulkSerializerMixin, BulkListSerializer
+
+class BalanceBulkSerializer(BulkSerializerMixin, serializers.ModelSerializer):
+    
+    class Meta:
+        model = Balance
+        fields = '__all__'
+        read_only_fields = ('block_reason',)
+        list_serializer_class = BulkListSerializer
+        validators = []  # ОТКЛЮЧАЕМ ВСЕ ВАЛИДАТОРЫ
+        
+    def validate(self, attrs):
+        """
+        Ручная валидация unique_together если необходимо
+        """
+        # Здесь можно реализовать свою проверку уникальности
+        return attrs
