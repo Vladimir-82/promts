@@ -1,0 +1,4 @@
+# Игнорировать блоки кода между указанными маркерами
+sonar.issue.ignore.block=block1
+sonar.issue.ignore.block.block1.beginBlockPattern=\s*//\s*BEGIN-IGNORE
+sonar.issue.ignore.block.block1.endBlockPattern=\s*//\s*END-IGNORE
