@@ -1,0 +1,9 @@
+def _check_fields(self):
+    """Проверка полей. Замена NaN/None на 'нет данных'."""
+    # Работаем только с колонками, где есть пропуски
+    for col in self.df.columns:
+        if self.df[col].isna().any():
+            # Создаем маску для NaN/None
+            mask = self.df[col].isna() | self.df[col].isnull()
+            # Заменяем значения
+            self.df.loc[mask, col] = 'нет данных'
