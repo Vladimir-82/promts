@@ -1,0 +1,24 @@
+# settings.py
+
+# Базовые настройки
+...
+
+# Настройки для локальной разработки
+if DEBUG:  # или проверка на локальную среду
+    SESSION_COOKIE_SECURE = False
+    CSRF_COOKIE_SECURE = False
+    SESSION_COOKIE_DOMAIN = None
+    
+    # Если используете CORS
+    CORS_ALLOW_CREDENTIALS = True
+    CORS_ALLOWED_ORIGINS = [
+        "http://localhost:3000",  # если у вас отдельный фронтенд
+        "http://127.0.0.1:3000",
+        "http://localhost:8000",
+    ]
+else:
+    # Настройки для продакшена (сервера)
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SESSION_COOKIE_DOMAIN = '.yourdomain.com'  # ваш домен
+    # ... остальные боевые настройки
