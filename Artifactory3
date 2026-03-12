@@ -1,0 +1,7 @@
+[global]
+index-url = https://artifactory.alfabank.by/artifactory/api/pypi/alfabank.python/simple
+trusted-host = artifactory.alfabank.by
+
+# Если требуется аутентификация (для записи или доступа к локальным пакетам)
+# [install]
+# extra-index-url = https://<username>:<password_or_token>@artifactory.alfabank.by/artifactory/api/pypi/alfabank.python/simple
