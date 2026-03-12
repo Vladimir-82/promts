@@ -1,0 +1,5 @@
+# Установить переменную окружения
+export UV_INDEX_URL=https://artifactory.alfabank.by/artifactory/api/pypi/alfabank-maven/simple
+
+# Затем выполнить установку
+uv python install 3.11.15
