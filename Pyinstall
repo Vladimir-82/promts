@@ -1,0 +1,3 @@
+uv pip install python3.11.9 \
+  --index-url https://<ваш-сервер-artifactory>/artifactory/api/pypi/alfabank-maven/simple \
+  --trusted-host <ваш-сервер-artifactory>
