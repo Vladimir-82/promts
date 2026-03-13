@@ -1,0 +1,124 @@
+from rest_framework import viewsets, status
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from django.shortcuts import get_object_or_404
+from .models import GroupFI, Bank
+from .serializers import GroupFISerializer, GroupFIListSerializer
+
+class GroupFIViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet для управления группами финансовых институтов.
+    
+    list: Получить список всех групп
+    create: Создать новую группу
+    retrieve: Получить детальную информацию о группе
+    update: Полностью обновить группу
+    partial_update: Частично обновить группу
+    destroy: Удалить группу
+    """
+    queryset = GroupFI.objects.all()
+    
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return GroupFIListSerializer
+        return GroupFISerializer
+    
+    def get_queryset(self):
+        """Фильтрация queryset в зависимости от роли пользователя"""
+        queryset = GroupFI.objects.select_related(
+            'analytic'
+        ).prefetch_related(
+            'financial_institutions'
+        )
+        
+        # Фильтр по активности
+        is_active = self.request.query_params.get('is_active')
+        if is_active is not None:
+            queryset = queryset.filter(is_active=is_active.lower() == 'true')
+        
+        # Поиск по названию
+        search = self.request.query_params.get('search')
+        if search:
+            queryset = queryset.filter(name__icontains=search)
+        
+        return queryset
+    
+    @action(detail=True, methods=['post'])
+    def add_institution(self, request, pk=None):
+        """
+        Добавить финансовый институт в группу
+        """
+        group = self.get_object()
+        bank_id = request.data.get('bank_id')
+        
+        if not bank_id:
+            return Response(
+                {'error': 'bank_id обязателен'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            bank = Bank.objects.get(id=bank_id)
+        except Bank.DoesNotExist:
+            return Response(
+                {'error': 'Финансовый институт не найден'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        if group.financial_institutions.filter(id=bank_id).exists():
+            return Response(
+                {'error': 'Финансовый институт уже в группе'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        group.financial_institutions.add(bank)
+        
+        serializer = GroupFISerializer(group)
+        return Response(serializer.data)
+    
+    @action(detail=True, methods=['post'])
+    def remove_institution(self, request, pk=None):
+        """
+        Удалить финансовый институт из группы
+        """
+        group = self.get_object()
+        bank_id = request.data.get('bank_id')
+        
+        if not bank_id:
+            return Response(
+                {'error': 'bank_id обязателен'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            bank = Bank.objects.get(id=bank_id)
+        except Bank.DoesNotExist:
+            return Response(
+                {'error': 'Финансовый институт не найден'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        if not group.financial_institutions.filter(id=bank_id).exists():
+            return Response(
+                {'error': 'Финансовый институт не в группе'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        group.financial_institutions.remove(bank)
+        
+        serializer = GroupFISerializer(group)
+        return Response(serializer.data)
+    
+    @action(detail=True, methods=['get'])
+    def institutions(self, request, pk=None):
+        """
+        Получить список всех финансовых институтов в группе
+        """
+        group = self.get_object()
+        institutions = group.financial_institutions.all()
+        
+        # Сериализуем используя BankSerializer
+        from .serializers import BankSerializer
+        serializer = BankSerializer(institutions, many=True)
+        
+        return Response(serializer.data)
