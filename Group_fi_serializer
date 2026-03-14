@@ -1,0 +1,25 @@
+from rest_framework import serializers
+from .models import MyModel, Bank
+
+class BankSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Bank
+        fields = ['id', 'name', 'code']
+
+class MyModelSerializer(serializers.ModelSerializer):
+    # Поле принимает список ID при создании/обновлении
+    bank = serializers.PrimaryKeyRelatedField(
+        queryset=Bank.objects.all(), 
+        many=True
+    )
+
+    class Meta:
+        model = MyModel
+        fields = ['id', 'bank', 'other_field']
+
+    def to_representation(self, instance):
+        # Получаем стандартное представление
+        representation = super().to_representation(instance)
+        # Заменяем список ID на сериализованные объекты
+        representation['bank'] = BankSerializer(instance.bank.all(), many=True).data
+        return representation
