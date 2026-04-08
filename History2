@@ -1,0 +1,283 @@
+from datetime import date
+from yourapp.models import GroupFI
+
+
+def get_group_composition_changes(date_from: date, date_to: date, group_ids: list = None):
+    """
+    Определяет группы, чей состав изменился между двумя датами.
+    Группы, не существовавшие на любую из дат, исключаются из результата.
+    
+    Args:
+        date_from: Начальная дата (состав "до")
+        date_to: Конечная дата (состав "после")
+        group_ids: Опциональный список ID групп для фильтрации
+        
+    Returns:
+        dict: {
+            group_id: {
+                'name': 'Название группы',
+                'banks_before': [{'id': 1, 'name': 'Банк А'}, ...],
+                'banks_after': [{'id': 1, 'name': 'Банк А'}, ...],
+                'added': [{'id': 2, 'name': 'Банк Б'}, ...],
+                'removed': [{'id': 3, 'name': 'Банк В'}, ...]
+            }
+        }
+    """
+    # Базовый queryset групп
+    groups_queryset = GroupFI.objects.all()
+    if group_ids:
+        groups_queryset = groups_queryset.filter(id__in=group_ids)
+    
+    result = {}
+    
+    for group in groups_queryset:
+        # Получаем исторические записи на обе даты
+        history_before = group.history.filter(history_date__date=date_from).first()
+        history_after = group.history.filter(history_date__date=date_to).first()
+        
+        # Если группа не существовала на date_from - используем ближайшую запись ДО date_from
+        if not history_before:
+            history_before = group.history.filter(
+                history_date__date__lte=date_from
+            ).order_by('-history_date').first()
+        
+        # Если группа не существовала на date_to - используем ближайшую запись ДО date_to
+        if not history_after:
+            history_after = group.history.filter(
+                history_date__date__lte=date_to
+            ).order_by('-history_date').first()
+        
+        # Проверяем существование группы на ОБЕ даты
+        group_existed_before = history_before is not None
+        group_existed_after = history_after is not None
+        
+        # Если группа не существовала хотя бы на одну из дат - пропускаем
+        if not group_existed_before or not group_existed_after:
+            continue
+        
+        # Получаем составы
+        banks_before = list(history_before.financial_institutions.values('id', 'name'))
+        banks_after = list(history_after.financial_institutions.values('id', 'name'))
+        
+        # Сравниваем составы
+        before_ids = {b['id'] for b in banks_before}
+        after_ids = {b['id'] for b in banks_after}
+        
+        # Если составы одинаковые - пропускаем
+        if before_ids == after_ids:
+            continue
+        
+        # Вычисляем изменения
+        added_ids = after_ids - before_ids
+        removed_ids = before_ids - after_ids
+        
+        result[group.id] = {
+            'name': group.name,
+            'banks_before': banks_before,
+            'banks_after': banks_after,
+            'added': [b for b in banks_after if b['id'] in added_ids],
+            'removed': [b for b in banks_before if b['id'] in removed_ids]
+        }
+    
+    return result
+
+
+def get_group_composition_changes_optimized(date_from: date, date_to: date, group_ids: list = None):
+    """
+    Оптимизированная версия с минимальным количеством запросов.
+    """
+    from django.db.models import Q, OuterRef, Subquery, Exists
+    
+    # Подзапрос для проверки существования группы на date_from
+    history_before_subquery = GroupFI.history.filter(
+        groupfi_id=OuterRef('id'),
+        history_date__date__lte=date_from
+    ).order_by('-history_date')
+    
+    # Подзапрос для проверки существования группы на date_to
+    history_after_subquery = GroupFI.history.filter(
+        groupfi_id=OuterRef('id'),
+        history_date__date__lte=date_to
+    ).order_by('-history_date')
+    
+    # Базовый queryset - только группы, существовавшие на обе даты
+    groups_queryset = GroupFI.objects.filter(
+        Exists(history_before_subquery),
+        Exists(history_after_subquery)
+    )
+    
+    if group_ids:
+        groups_queryset = groups_queryset.filter(id__in=group_ids)
+    
+    result = {}
+    
+    # Загружаем все группы с prefetch для оптимизации
+    for group in groups_queryset.prefetch_related('financial_institutions'):
+        # Получаем состояние на date_from
+        history_before = group.history.filter(
+            history_date__date__lte=date_from
+        ).order_by('-history_date').first()
+        
+        # Получаем состояние на date_to
+        history_after = group.history.filter(
+            history_date__date__lte=date_to
+        ).order_by('-history_date').first()
+        
+        # Дополнительная проверка (хотя фильтр выше уже гарантирует существование)
+        if not history_before or not history_after:
+            continue
+        
+        banks_before = list(history_before.financial_institutions.values('id', 'name'))
+        banks_after = list(history_after.financial_institutions.values('id', 'name'))
+        
+        before_ids = {b['id'] for b in banks_before}
+        after_ids = {b['id'] for b in banks_after}
+        
+        if before_ids == after_ids:
+            continue
+        
+        added_ids = after_ids - before_ids
+        removed_ids = before_ids - after_ids
+        
+        result[group.id] = {
+            'name': group.name,
+            'banks_before': banks_before,
+            'banks_after': banks_after,
+            'added': [b for b in banks_after if b['id'] in added_ids],
+            'removed': [b for b in banks_before if b['id'] in removed_ids]
+        }
+    
+    return result
+
+
+def get_group_changes_batch(date_from: date, date_to: date, group_ids: list = None, batch_size=100):
+    """
+    Пакетная обработка для большого количества групп.
+    """
+    groups_queryset = GroupFI.objects.all()
+    if group_ids:
+        groups_queryset = groups_queryset.filter(id__in=group_ids)
+    
+    group_ids_list = list(groups_queryset.values_list('id', flat=True))
+    result = {}
+    
+    for i in range(0, len(group_ids_list), batch_size):
+        batch_ids = group_ids_list[i:i + batch_size]
+        batch_result = get_group_composition_changes(date_from, date_to, batch_ids)
+        result.update(batch_result)
+    
+    return result
+
+
+def get_group_existence_info(date_from: date, date_to: date, group_ids: list = None):
+    """
+    Дополнительная функция для анализа существования групп на даты.
+    Показывает, какие группы были исключены из отчёта и почему.
+    """
+    groups_queryset = GroupFI.objects.all()
+    if group_ids:
+        groups_queryset = groups_queryset.filter(id__in=group_ids)
+    
+    result = {
+        'existed_on_both': [],
+        'missing_on_from': [],
+        'missing_on_to': [],
+        'missing_on_both': []
+    }
+    
+    for group in groups_queryset:
+        history_before = group.history.filter(history_date__date__lte=date_from).order_by('-history_date').first()
+        history_after = group.history.filter(history_date__date__lte=date_to).order_by('-history_date').first()
+        
+        existed_before = history_before is not None
+        existed_after = history_after is not None
+        
+        group_info = {
+            'id': group.id,
+            'name': group.name,
+            'created_date': group.history.order_by('history_date').first().history_date.date() if group.history.exists() else None
+        }
+        
+        if existed_before and existed_after:
+            result['existed_on_both'].append(group_info)
+        elif not existed_before and not existed_after:
+            result['missing_on_both'].append(group_info)
+        elif not existed_before:
+            result['missing_on_from'].append(group_info)
+        else:
+            result['missing_on_to'].append(group_info)
+    
+    return result
+
+
+# Пример использования
+def example_usage():
+    from datetime import date, timedelta
+    
+    date_from = date(2024, 1, 1)
+    date_to = date(2024, 12, 31)
+    
+    # Получаем только изменившиеся группы, существовавшие на обе даты
+    changes = get_group_composition_changes(date_from, date_to)
+    
+    print(f"Найдено групп с изменениями: {len(changes)}")
+    
+    for group_id, data in changes.items():
+        print(f"\n📁 ГРУППА: {data['name']} (ID: {group_id})")
+        print(f"   Состав ДО ({date_from}): {len(data['banks_before'])} банков")
+        print(f"   Состав ПОСЛЕ ({date_to}): {len(data['banks_after'])} банков")
+        
+        if data['added']:
+            print(f"   ➕ Добавлены: {', '.join([b['name'] for b in data['added']])}")
+        
+        if data['removed']:
+            print(f"   ➖ Удалены: {', '.join([b['name'] for b in data['removed']])}")
+    
+    # Анализ существования групп (для отладки)
+    existence_info = get_group_existence_info(date_from, date_to)
+    
+    if existence_info['missing_on_from']:
+        print(f"\n⚠️ Группы, не существовавшие на {date_from}:")
+        for g in existence_info['missing_on_from']:
+            print(f"   - {g['name']} (ID: {g['id']}, создана: {g['created_date']})")
+    
+    if existence_info['missing_on_to']:
+        print(f"\n⚠️ Группы, не существовавшие на {date_to}:")
+        for g in existence_info['missing_on_to']:
+            print(f"   - {g['name']} (ID: {g['id']})")
+    
+    return changes
+
+
+def format_changes_report(changes: dict, date_from: date, date_to: date) -> str:
+    """
+    Форматирует отчёт об изменениях в читаемый вид.
+    """
+    report = []
+    report.append("=" * 80)
+    report.append(f"ОТЧЁТ ОБ ИЗМЕНЕНИЯХ СОСТАВА ГРУПП")
+    report.append(f"Период: {date_from} → {date_to}")
+    report.append("=" * 80)
+    
+    if not changes:
+        report.append("\n✅ Нет групп, изменивших состав за указанный период.")
+        return "\n".join(report)
+    
+    for group_id, data in changes.items():
+        report.append(f"\n📁 {data['name']} (ID: {group_id})")
+        report.append("-" * 40)
+        
+        if data['added']:
+            report.append(f"✅ ДОБАВЛЕНЫ ({len(data['added'])}):")
+            for bank in data['added']:
+                report.append(f"   • {bank['name']}")
+        
+        if data['removed']:
+            report.append(f"❌ УДАЛЕНЫ ({len(data['removed'])}):")
+            for bank in data['removed']:
+                report.append(f"   • {bank['name']}")
+        
+        report.append(f"\n📊 Статистика: {len(data['banks_before'])} → {len(data['banks_after'])} банков")
+        report.append("")
+    
+    return "\n".join(report)
