@@ -1,0 +1,199 @@
+from datetime import date
+from django.db.models import Q
+from yourapp.models import GroupFI, Bank
+
+
+def get_banks_in_group_on_date(group_id: int, target_date: date):
+    """
+    Получить список банков, входящих в группу на конкретную дату.
+    
+    Args:
+        group_id: ID группы
+        target_date: Дата, на которую нужно получить состав группы
+        
+    Returns:
+        QuerySet банков, которые были в группе на указанную дату
+    """
+    try:
+        group = GroupFI.objects.get(id=group_id)
+    except GroupFI.DoesNotExist:
+        return Bank.objects.none()
+    
+    # Получаем историческую версию группы на target_date
+    historical_group = group.history.as_of(target_date)
+    
+    if historical_group is None:
+        # Группа не существовала на эту дату
+        return Bank.objects.none()
+    
+    # Получаем ID банков из исторической many-to-many связи
+    # HistoricalRecords сохраняет m2m в отдельной модели
+    historical_m2m = historical_group.financial_institutions.all()
+    bank_ids = [bank.id for bank in historical_m2m]
+    
+    # Возвращаем актуальные объекты Bank (фильтруем по существующим ID)
+    return Bank.objects.filter(id__in=bank_ids)
+
+
+def get_banks_in_group_for_date_range(group_id: int, date_from: date, date_to: date):
+    """
+    Получить словарь с составом группы на каждую дату в диапазоне.
+    
+    Args:
+        group_id: ID группы
+        date_from: Начальная дата
+        date_to: Конечная дата
+        
+    Returns:
+        dict: {date: list_of_bank_names}
+    """
+    try:
+        group = GroupFI.objects.get(id=group_id)
+    except GroupFI.DoesNotExist:
+        return {}
+    
+    result = {}
+    current_date = date_from
+    
+    while current_date <= date_to:
+        historical_group = group.history.as_of(current_date)
+        
+        if historical_group:
+            banks = historical_group.financial_institutions.all()
+            result[current_date] = list(banks.values_list('name', flat=True))
+        else:
+            result[current_date] = []
+        
+        # Переходим к следующему дню
+        from datetime import timedelta
+        current_date += timedelta(days=1)
+    
+    return result
+
+
+def get_group_membership_history_for_bank(bank_id: int):
+    """
+    Получить историю вхождения банка в группы.
+    
+    Args:
+        bank_id: ID банка
+        
+    Returns:
+        list: История изменений членства в группах
+    """
+    bank = Bank.objects.get(id=bank_id)
+    
+    # Находим все исторические записи групп, где был этот банк
+    history_entries = []
+    
+    for group in GroupFI.objects.all():
+        historical_records = group.history.filter(
+            Q(financial_institutions__id=bank_id) | 
+            Q(_history_date__isnull=False)
+        )
+        
+        for record in historical_records:
+            banks_on_date = record.financial_institutions.all()
+            if bank in banks_on_date:
+                history_entries.append({
+                    'group_id': group.id,
+                    'group_name': group.name,
+                    'date': record.history_date,
+                    'history_type': record.history_type,  # '+', '-', '~'
+                })
+    
+    return sorted(history_entries, key=lambda x: x['date'])
+
+
+def get_banks_in_group_with_dates(group_id: int):
+    """
+    Получить все банки группы с указанием периодов их нахождения в группе.
+    
+    Args:
+        group_id: ID группы
+        
+    Returns:
+        dict: {bank_name: [(date_from, date_to), ...]}
+    """
+    try:
+        group = GroupFI.objects.get(id=group_id)
+    except GroupFI.DoesNotExist:
+        return {}
+    
+    result = {}
+    
+    # Получаем все исторические изменения группы
+    history_records = group.history.order_by('history_date')
+    
+    if not history_records:
+        # Если истории нет, берём текущий состав
+        for bank in group.financial_institutions.all():
+            result[bank.name] = [(None, None)]  # Весь период
+        return result
+    
+    # Анализируем изменения состава группы
+    previous_banks = set()
+    previous_date = None
+    
+    for record in history_records:
+        current_banks = set(record.financial_institutions.all())
+        current_date = record.history_date
+        
+        # Банки, которые были добавлены
+        added_banks = current_banks - previous_banks
+        for bank in added_banks:
+            if bank.name not in result:
+                result[bank.name] = []
+            result[bank.name].append((current_date, None))
+        
+        # Банки, которые были удалены
+        removed_banks = previous_banks - current_banks
+        for bank in removed_banks:
+            if bank.name in result and result[bank.name]:
+                # Закрываем последний открытый период
+                last_period = result[bank.name][-1]
+                if last_period[1] is None:
+                    result[bank.name][-1] = (last_period[0], current_date)
+        
+        previous_banks = current_banks
+        previous_date = current_date
+    
+    # Закрываем периоды для банков, которые остались в группе
+    for bank in previous_banks:
+        if bank.name in result and result[bank.name]:
+            last_period = result[bank.name][-1]
+            if last_period[1] is None:
+                result[bank.name][-1] = (last_period[0], None)
+    
+    return result
+
+
+# Пример использования:
+def example_usage():
+    """Пример использования функций."""
+    from datetime import date
+    
+    group_id = 1
+    date_from = date(2024, 1, 1)
+    date_to = date(2024, 12, 31)
+    
+    # Получить банки на конкретную дату
+    banks_on_date = get_banks_in_group_on_date(group_id, date(2024, 6, 15))
+    print(f"Банки в группе на 15.06.2024: {[b.name for b in banks_on_date]}")
+    
+    # Получить состав группы на каждую дату в диапазоне
+    daily_composition = get_banks_in_group_for_date_range(group_id, date_from, date_to)
+    for dt, banks in daily_composition.items():
+        print(f"{dt}: {', '.join(banks)}")
+    
+    # Получить историю банка по группам
+    bank_history = get_group_membership_history_for_bank(42)
+    for entry in bank_history:
+        print(f"Банк был в группе '{entry['group_name']}' на {entry['date']}")
+    
+    # Получить периоды нахождения банков в группе
+    periods = get_banks_in_group_with_dates(group_id)
+    for bank_name, periods_list in periods.items():
+        for start, end in periods_list:
+            end_str = end if end else "настоящее время"
+            print(f"{bank_name}: с {start} по {end_str}")
