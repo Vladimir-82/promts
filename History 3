@@ -1,0 +1,80 @@
+def _get_groups_changes(self):
+    from django.db.models import Prefetch, Q
+    
+    # Подзапросы для поиска ID исторических записей
+    hist_from_id = GroupFI.history.filter(
+        group_number=OuterRef('group_number'),
+        history_date__lte=self.date_from
+    ).order_by('-history_date').values('history_id')[:1]
+
+    hist_to_id = GroupFI.history.filter(
+        group_number=OuterRef('group_number'),
+        history_date__lte=self.date_to
+    ).order_by('-history_date').values('history_id')[:1]
+
+    groups_with_hist_ids = GroupFI.objects.filter(is_active=True).annotate(
+        target_hist_from_id=Subquery(hist_from_id),
+        target_hist_to_id=Subquery(hist_to_id)
+    )
+
+    # Получаем все исторические записи с предзагрузкой банков
+    all_hist_ids = []
+    for g in groups_with_hist_ids:
+        if g.target_hist_from_id:
+            all_hist_ids.append(g.target_hist_from_id)
+        if g.target_hist_to_id:
+            all_hist_ids.append(g.target_hist_to_id)
+    
+    # ИСПРАВЛЕНИЕ: правильный prefetch для исторической модели с m2m
+    all_histories = GroupFI.history.filter(
+        history_id__in=all_hist_ids
+    ).prefetch_related(
+        Prefetch('financial_institutions', queryset=Bank.objects.all())
+    )
+
+    hist_map = {h.history_id: h for h in all_histories}
+
+    results = []
+    for group in groups_with_hist_ids:
+        history_from = hist_map.get(group.target_hist_from_id)
+        history_to = hist_map.get(group.target_hist_to_id)
+
+        if not history_from and not history_to:
+            continue
+
+        members_from, members_to = self._get_group_members(history_from, history_to)
+        members_from_ids = self._get_bank_ids(members_from)
+        members_to_ids = self._get_bank_ids(members_to)
+
+        if sorted(members_from_ids) != sorted(members_to_ids):
+            results.append({
+                'group_id': group.id,
+                'group_name': group.name,
+                'group_number': group.group_number,
+                'members_from_ids': members_from_ids,
+                'members_to_ids': members_to_ids,
+                'composition_from': [
+                    {'id': b.id, 'name': b.name, 
+                     'base_number': b.base_number, 'category': b.category} 
+                    for b in members_from
+                ],
+                'composition_to': [
+                    {'id': b.id, 'name': b.name, 
+                     'base_number': b.base_number, 'category': b.category} 
+                    for b in members_to
+                ]
+            })
+
+    return results
+
+
+@staticmethod
+def _get_members(history_model):
+    """Члены группы."""
+    return history_model.financial_institutions.all()
+
+@staticmethod
+def _get_bank_ids(members):
+    """Получение перечня ID членов группы."""
+    return {member.id for member in members}
+
