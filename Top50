@@ -1,0 +1,265 @@
+"""Выгрузка информации по ТОП 50 клиентов. (FAUL-1690)
+
+При вызове 'create' необходимо задать путь до Excel файла с ТОП 50 клиентов.
+Базовые номера клиентов должны находится в столбце 'B' файла.
+
+Данные для отчета берутся из балансов клиентов.
+Данные по показателю EBITDA берутся в годовом выражении из сведений, формируемых в ПО ФАЮЛ во вкладке отчет.
+"""
+
+from pathlib import Path
+
+import pandas as pd
+
+from apps.clients.models.models import Client
+from apps.finances.models.balances import Balance
+from apps.utils import (
+    Format,
+    add_table,
+)
+from apps.utils.datetime import date_to_str
+from apps.utils.file import create_dir_if_not_exists
+
+
+class Top50Report:
+    """Выгрузка информации по ТОП 50 клиентов."""
+
+    ND = 'н/д'
+    BALANCE = 'баланс'
+    OPU = 'ОПУ'
+    ODDS = 'ОДДС'
+    ADD = 'Дополнительная информация'
+
+    def __init__(self, date1, date2) -> None:
+        self.date1 = date1
+        self.date2 = date2
+        self.path = Path('static', 'reports', 'balances', 'top50')
+        create_dir_if_not_exists(self.path)
+
+        exclude_fields = {
+            'client', 'consolidation_clients', 'date', 'b560credit', 'pAmortisation', 'pEbitCorrection',
+            'pPercentsCorrection', 'pCapitalCorrection', 'pCapitalOwnLoansLongCorrection', 'bDeveloperIncome',
+            'b180FX', 'b230FX', 'b540FX', 'b650FX', 'pBonusReceived', 'pBonusPayed', 'bOwnLoansLong',
+            'bOwnLoansShort', 'pExportShare', 'pImportShare', 'leasing_portfolio', 'debt', 'short_debt',
+            'long_debt', 'long_liabilities', 'block_reason', 'history', 'id', 'created', 'modified',
+        }
+        self.field_names = [
+            (f.name, f.verbose_name.lstrip('- '))
+            for f in Balance._meta.get_fields()
+            if f.name not in exclude_fields
+            and getattr(f, 'verbose_name', None)
+        ]
+        self.report_types = {
+            'b': self.BALANCE,
+            'p': self.OPU,
+        }
+
+    def create(self, file_path: str):
+        """Формирование отчетов по ТОП 50 клиентов."""
+        with pd.ExcelFile(file_path) as excel_file:
+            df = pd.read_excel(excel_file, sheet_name=0, usecols='B', dtype=str, names=['base_number'])  # Базовые номера в столбце B файла
+            base_numbers = df['base_number'].tolist()
+            clients = Client.objects.filter(base_number__in=base_numbers).only('id', 'unp', 'name').in_bulk(field_name='id')
+            balances_date1 = self._get_balances(clients, self.date1)
+            balances_date2 = self._get_balances(clients, self.date2)
+            for client_id, client in clients.items():
+                balance_date1 = balances_date1.get(client_id)
+                balance_date2 = balances_date2.get(client_id)
+                self.create_client_report(client, balance_date1, balance_date2)
+
+    def create_client_report(self, client, balance_date1, balance_date2):
+        """Формирование отчета по заданному клиенту."""
+        file_name = self._generate_file_name(client.name)
+        excel_file = self.path / file_name
+        with pd.ExcelWriter(excel_file, engine='xlsxwriter') as writer:
+            format_ = Format(writer.book, header_color='#b02421', header_font_color='#fcfafa')
+            self._get_sheet(writer, format_, client, balance_date1, balance_date2)
+
+    def _get_sheet(self, writer, format_: Format, client, balance_date1, balance_date2) -> None:
+        """Формирование листа файла."""
+        worksheet = writer.book.add_worksheet()
+        self._sheet_settings(worksheet)
+        table = self._create_table(client, balance_date1, balance_date2)
+
+        columns_options = [
+            {'header': 'УНП', 'header_format': format_.header, 'format': format_.left},
+            {'header': 'Форма отчетности', 'header_format': format_.header, 'format': format_.center},
+            {'header': 'Символ', 'header_format': format_.header, 'format': format_.center},
+            {'header': 'Показатель', 'header_format': format_.header, 'format': format_.left},
+            {'header': f'{date_to_str(self.date2)}', 'header_format': format_.header, 'format': format_.num},
+            {'header': f'{date_to_str(self.date1)}', 'header_format': format_.header, 'format': format_.num},
+        ]
+        add_table(
+            table,
+            worksheet,
+            row=0,
+            col=0,
+            options={'header_row': True, 'banded_rows': True},
+            columns_options=columns_options,
+        )
+
+    def _create_table(self, client, balance_date1, balance_date2) -> pd.DataFrame:
+        """Создание таблицы с данными."""
+        report_data = self._get_report_data(client, balance_date1, balance_date2)
+        return pd.DataFrame(report_data)
+
+    def _get_report_data(self, client, balance_date1, balance_date2) -> list[tuple]:
+        """Получение информации по отчету."""
+
+        report_data = self._get_balance_data(balance_date1, balance_date2, client.unp)
+        report_data.extend(self._get_rest_balance_data(client.unp))
+        report_data.extend(self._get_odds_data(client.unp))
+        report_data.extend(self._get_additional_data(balance_date1, balance_date2, client.unp))
+        return report_data
+
+    def _get_balance_data(self, balance_date1, balance_date2, unp):
+        """Получение информации по балансам."""
+        balance_data = []
+        for name, verbose_name in self.field_names:
+            prefix, code = name[0], name[1:]
+            balance_data.append(
+                (
+                    unp,
+                    self.report_types[prefix],
+                    code,
+                    verbose_name,
+                    getattr(balance_date2, name, self.ND),
+                    getattr(balance_date1, name, self.ND),
+                ),
+            )
+        return balance_data
+
+    def _get_rest_balance_data(self, unp):
+        """Получение информации по балансам полей которых нет в ФАЮЛ."""
+        criteria = {
+            '220': 'Результат от переоценки долгосрочных активов, не включаемый в чистую прибыль (убыток)',
+            '230': 'Результат от прочих операций, не включаемый в чистую прибыль (убыток)',
+            '240': 'Совокупная прибыль (убыток)',
+            '250': 'Базовая прибыль (убыток) на акцию',
+            '260': 'Разводненная прибыль (убыток) на акцию',
+        }
+        return [
+            (unp, self.OPU, code, criteria_name, '', '')  # Возможно правильнее указывать 'н/д'
+            for code, criteria_name in criteria.items()
+        ]
+
+    def _get_odds_data(self, unp):
+        """Получение информации `О движении денежных средств`."""
+        criteria = {
+            '20': 'Поступило денежных средств - всего',
+            '21': 'от покупателей продукции, товаров, заказчиков работ, услуг',
+            '22': 'от покупателей материалов и других запасов',
+            '23': 'роялти',
+            '24': 'прочие поступления',
+            '30': 'Направлено денежных средств – всего',
+            '31': 'на приобретение запасов, работ, услуг',
+            '32': 'на оплату труда',
+            '33': 'на уплату налогов и сборов',
+            '34': 'на прочие выплаты',
+            '40': 'Результат движения денежных средств по текущей деятельности',
+            '50': 'Поступило денежных средств – всего',
+            '51': 'от покупателей основных средств, нематериальных активов и других долгосрочных активов',
+            '52': 'возврат предоставленных займов',
+            '53': 'доходы от участия в уставном капитале других организаций',
+            '54': 'проценты',
+            '55': 'прочие поступления',
+            '60': 'Направлено денежных средств – всего',
+            '61': 'на приобретение и создание основных средств, нематериальных активов и других долгосрочных активов',
+            '62': 'на предоставление займов',
+            '63': 'на вклады в уставный капитал других организаций',
+            '64': 'прочие выплаты',
+            '70': 'Результат движения денежных средств по инвестиционной деятельности ',
+            '80': 'Поступило денежных средств – всего',
+            '81': 'кредиты и займы',
+            '82': 'от выпуска акций',
+            '83': 'вклады собственника имущества (учредителей, участников)',
+            '84': 'прочие поступления',
+            '90': 'Направлено денежных средств – всего',
+            '91': 'на погашение кредитов и займов',
+            '92': 'на выплаты дивидендов и других доходов от участия в уставном капитале организации',
+            '93': 'на выплаты процентов',
+            '94': 'на лизинговые платежи',
+            '95': 'прочие выплаты',
+            '100': 'Результат движения денежных средств по финансовой деятельности',
+            '110': 'Результат движения денежных средств по текущей, инвестиционной и финансовой деятельности',
+            '120': 'Остаток денежных средств и эквивалентов денежных средств на __ г.',
+            '130': 'Остаток денежных средств и эквивалентов денежных средств на ___ 20__ г.',
+            '140': 'Влияние изменений курса иностранных валют',
+        }
+        return [
+            (unp, self.ODDS, code, criteria_name, '', '')
+            for code, criteria_name in criteria.items()
+        ]
+
+    def _get_additional_data(self, balance_date1, balance_date2, unp):
+        """Получение дополнительной информации."""
+        additional_data = [
+            (unp, self.ADD, '901', 'EBITDA', self._get_ebitda(balance_date2), self._get_ebitda(balance_date1)),
+            (unp, self.ADD, '902', 'амортизация', self._get_amortisation(balance_date2), self._get_amortisation(balance_date1)),
+        ]
+        criteria = {
+            '903': 'погашение кредитов и займов',
+            '903.1': 'основной долг',
+            '903.2': 'проценты',
+            '904': 'средневзвешенный срок кредита',
+            '905': 'Условно-постоянные расходы за отчетный период',
+            '906': 'Условно-переменные расходы за отчетный период',
+        }
+        additional_data.extend(
+            (unp, self.ADD, code, criteria_name, '', '')
+            for code, criteria_name in criteria.items()
+        )
+        return additional_data
+
+    def _get_ebitda(self, balance: Balance):
+        """Получение ebitda."""
+        if balance:
+            return balance.p090 + balance.pEbitCorrection + balance.pAmortisation
+        return self.ND
+
+    def _get_amortisation(self, balance: Balance):
+        """Получение амортизации."""
+        return getattr(balance, 'pAmortisation', self.ND)
+
+    @staticmethod
+    def _get_balances(client_ids, date):
+        """Получение балансов."""
+        return (
+            Balance.objects
+            .filter(client_id__in=client_ids, date=date)
+            .order_by('client_id')
+            .distinct('client_id')
+            .in_bulk(field_name='client_id')
+        )
+
+    def _sheet_settings(self, worksheet) -> None:
+        """Настройки для листов."""
+        self._set_columns_width(worksheet)
+        worksheet.set_zoom(100)
+        worksheet.set_paper(9)  # Лист A4
+        worksheet.set_landscape()
+        worksheet.fit_to_pages(1, 1)
+        worksheet.freeze_panes(1, 0)
+
+    def _generate_file_name(self, client_name: str) -> str:
+        """Получение имени файла."""
+        client_name = self._clean_name(client_name)
+        return f'{client_name}.xlsx'
+
+    @staticmethod
+    def _clean_name(client_name: str):
+        """Очистка имени от нежелательных символов."""
+        return client_name.replace('"', '').replace('«', '').replace('»', '')
+
+
+    @staticmethod
+    def _set_columns_width(worksheet):
+        """Установка ширины столбцов."""
+        columns_width = {
+            'A:F': 15,
+            'B:B': 20,
+            'C:C': 10,
+            'D:D': 40,
+        }
+        for col_name, width in columns_width.items():
+            worksheet.set_column(col_name, width)
