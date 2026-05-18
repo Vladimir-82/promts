@@ -1,0 +1,48 @@
+def _get_groups_fi(self):
+    """Получение групп финансовых институтов."""
+    return (
+        GroupFI.history
+        .as_of(self.date)
+        .only('group_number', 'name', 'is_active', 'analytic_id')
+        .order_by('group_number', 'name')
+    )
+
+def _get_report_data(self) -> list[tuple]:
+    """Получение информации по отчету."""
+    category_map = dict(Category.choices)
+    
+    # Получаем все группы
+    groups = list(self.groups_fi)
+    
+    # Собираем ID аналитиков
+    analytic_ids = {g.analytic_id for g in groups if g.analytic_id}
+    analysts = {
+        a.id: f"{a.first_name}.{a.last_name}"
+        for a in User.objects.filter(id__in=analytic_ids)
+    }
+    
+    report_data = []
+    for group in groups:
+        # Для каждой группы делаем отдельный запрос банков
+        # Но это все равно лучше, чем N+1 в оригинале, если N - количество групп
+        bank_ids = GroupFI.financial_institutions.through.objects.filter(
+            groupfi_id=group.id
+        ).values_list('bank_id', flat=True)
+        
+        banks = Bank.objects.filter(id__in=bank_ids).select_related('country')
+        
+        analytic_name = analysts.get(group.analytic_id, '—')
+        is_active_flag = YES if group.is_active else NO
+        
+        for bank in banks:
+            report_data.append((
+                group.group_number,
+                group.name,
+                bank.base_number,
+                bank.name,
+                category_map.get(bank.category, '—'),
+                analytic_name,
+                is_active_flag
+            ))
+    
+    return report_data
