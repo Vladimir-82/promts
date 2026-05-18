@@ -1,0 +1,70 @@
+def _get_groups_fi(self):
+    """Получение групп финансовых институтов - один запрос."""
+    return list(
+        GroupFI.history
+        .as_of(self.date)
+        .only('group_number', 'name', 'is_active', 'analytic_id', 'id')
+        .order_by('group_number', 'name')
+    )
+
+def _get_report_data(self) -> list[tuple]:
+    """Получение информации по отчету - 3 запроса."""
+    category_map = dict(Category.choices)
+    
+    groups = self.groups_fi
+    group_ids = [g.id for g in groups]
+    
+    if not group_ids:
+        return []
+    
+    # 1. Получаем все связи many-to-many (текущие, не исторические)
+    # Важно: связи могут измениться после даты снимка!
+    group_bank_mappings = (
+        GroupFI.financial_institutions.through.objects
+        .filter(groupfi_id__in=group_ids)
+        .values_list('groupfi_id', 'bank_id')
+    )
+    
+    all_bank_ids = {bank_id for _, bank_id in group_bank_mappings}
+    
+    # 2. Получаем всех аналитиков
+    analytic_ids = {g.analytic_id for g in groups if g.analytic_id}
+    analysts = {
+        a.id: f"{a.first_name}.{a.last_name}"
+        for a in User.objects.filter(id__in=analytic_ids)
+    }
+    
+    # 3. Получаем все банки
+    banks = {
+        b.id: b for b in (
+            Bank.objects
+            .filter(id__in=all_bank_ids)
+            .select_related('country')
+            .only('id', 'base_number', 'name', 'category')
+        )
+    }
+    
+    # Группируем банки по группам
+    group_banks = {}
+    for group_id, bank_id in group_bank_mappings:
+        if bank_id in banks:
+            group_banks.setdefault(group_id, []).append(banks[bank_id])
+    
+    # Формируем результат
+    report_data = []
+    for group in groups:
+        analytic_name = analysts.get(group.analytic_id, '—')
+        is_active_flag = YES if group.is_active else NO
+        
+        for bank in group_banks.get(group.id, []):
+            report_data.append((
+                group.group_number,
+                group.name,
+                bank.base_number,
+                bank.name,
+                category_map.get(bank.category, '—'),
+                analytic_name,
+                is_active_flag
+            ))
+    
+    return report_data
