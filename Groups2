@@ -1,0 +1,82 @@
+def _get_groups_fi(self):
+    """Получение групп финансовых институтов."""
+    # Получаем только исторические записи групп без связанных объектов
+    return (
+        GroupFI.history
+        .as_of(self.date)
+        .only('group_number', 'name', 'is_active', 'analytic_id', 'id')
+        .order_by('group_number', 'name')
+    )
+
+def _get_report_data(self) -> list[tuple]:
+    """Получение информации по отчету с оптимизированными запросами."""
+    category_map = dict(Category.choices)
+    
+    # Получаем все группы
+    groups = list(self.groups_fi)
+    
+    # Собираем все ID групп для одного запроса связей many-to-many
+    group_ids = [group.id for group in groups]
+    
+    # ОДИН запрос для получения всех финансовых институтов для всех групп
+    # Используем через through модель, так как history не поддерживает prefetch
+    from apps.banks.models.banks.group_fi import GroupFI_FI  # предполагаемая through модель
+    
+    # Получаем все связи групп с банками на нужную дату
+    group_bank_relations = (
+        GroupFI_FI.history  # если through модель тоже историческая
+        .as_of(self.date)
+        .filter(group_fi_id__in=group_ids)
+        .values_list('group_fi_id', 'bank_id')
+    )
+    
+    # Или если through модель не историческая, то проще:
+    # group_bank_relations = GroupFI.financial_institutions.through.objects.filter(
+    #     groupfi_id__in=group_ids
+    # ).values_list('groupfi_id', 'bank_id')
+    
+    # Собираем все ID банков
+    bank_ids = set(bank_id for _, bank_id in group_bank_relations)
+    
+    # ОДИН запрос для получения всех банков
+    banks = {
+        bank.id: bank for bank in Bank.objects.filter(id__in=bank_ids).select_related('country').only(
+            'id', 'base_number', 'name', 'category', 'country'
+        )
+    }
+    
+    # Собираем все ID аналитиков
+    analytic_ids = {group.analytic_id for group in groups if group.analytic_id}
+    
+    # ОДИН запрос для получения всех аналитиков
+    analysts = {
+        analyst.id: f"{analyst.first_name}.{analyst.last_name}"
+        for analyst in User.objects.filter(id__in=analytic_ids).only('id', 'first_name', 'last_name')
+    }
+    
+    # Группируем банки по группам
+    group_to_banks = {}
+    for group_id, bank_id in group_bank_relations:
+        if group_id not in group_to_banks:
+            group_to_banks[group_id] = []
+        if bank_id in banks:
+            group_to_banks[group_id].append(banks[bank_id])
+    
+    # Формируем отчет
+    report_data = []
+    for group in groups:
+        analytic_name = analysts.get(group.analytic_id, '—')
+        is_active_flag = YES if group.is_active else NO
+        
+        for bank in group_to_banks.get(group.id, []):
+            report_data.append((
+                group.group_number,
+                group.name,
+                bank.base_number,
+                bank.name,
+                category_map.get(bank.category, '—'),
+                analytic_name,
+                is_active_flag
+            ))
+    
+    return report_data
