@@ -1,0 +1,126 @@
+def _get_groups_fi(self):
+    """Получение групп финансовых институтов - один запрос."""
+    # Один запрос на все исторические записи
+    return list(
+        GroupFI.history
+        .as_of(self.date)
+        .only('group_number', 'name', 'is_active', 'analytic_id', 'id')
+        .order_by('group_number', 'name')
+    )
+
+def _get_report_data(self) -> list[tuple]:
+    """Получение информации по отчету - всего 4 запроса."""
+    category_map = dict(Category.choices)
+    
+    # 1. Получаем группы (уже сделано в _get_groups_fi)
+    groups = self.groups_fi
+    group_ids = [g.id for g in groups]
+    
+    # 2. ОДИН запрос для получения всех ID банков для всех групп
+    # Используем через through модель
+    group_bank_mappings = (
+        GroupFI.financial_institutions.through.objects
+        .filter(groupfi_id__in=group_ids)
+        .values_list('groupfi_id', 'bank_id')
+    )
+    
+    # Собираем все ID банков
+    all_bank_ids = set(bank_id for _, bank_id in group_bank_mappings)
+    
+    # 3. ОДИН запрос для получения всех банков с join к country
+    banks = {
+        bank.id: bank for bank in (
+            Bank.objects
+            .filter(id__in=all_bank_ids)
+            .select_related('country')
+            .only('id', 'base_number', 'name', 'category')
+        )
+    }
+    
+    # 4. ОДИН запрос для получения всех аналитиков
+    analytic_ids = {g.analytic_id for g in groups if g.analytic_id}
+    analysts = {
+        analyst.id: f"{analyst.first_name}.{analyst.last_name}"
+        for analyst in User.objects.filter(id__in=analytic_ids)
+    }
+    
+    # Группируем банки по группам
+    group_banks = {}
+    for group_id, bank_id in group_bank_mappings:
+        if bank_id in banks:
+            group_banks.setdefault(group_id, []).append(banks[bank_id])
+    
+    # Формируем результат
+    report_data = []
+    for group in groups:
+        analytic_name = analysts.get(group.analytic_id, '—')
+        is_active_flag = YES if group.is_active else NO
+        
+        for bank in group_banks.get(group.id, []):
+            report_data.append((
+                group.group_number,
+                group.name,
+                bank.base_number,
+                bank.name,
+                category_map.get(bank.category, '—'),
+                analytic_name,
+                is_active_flag
+            ))
+    
+    return report_data
+
+
+def _get_report_data(self) -> list[tuple]:
+    """Альтернативный вариант с минимумом объектов."""
+    category_map = dict(Category.choices)
+    
+    groups = self.groups_fi
+    group_ids = [g.id for g in groups]
+    
+    # Получаем все связи одним запросом
+    from django.db import connection
+    
+    # Используем сырой SQL для максимальной производительности
+    with connection.cursor() as cursor:
+        cursor.execute("""
+            SELECT gfi.groupfi_id, gfi.bank_id
+            FROM banks_groupf_financial_institutions gfi
+            WHERE gfi.groupfi_id IN %s
+        """, [tuple(group_ids)])
+        mappings = cursor.fetchall()
+    
+    bank_ids = set(b[1] for b in mappings)
+    
+    # Получаем банки
+    banks_data = {
+        b['id']: b for b in Bank.objects.filter(id__in=bank_ids).values('id', 'base_number', 'name', 'category')
+    }
+    
+    # Получаем аналитиков
+    analysts = {
+        a['id']: f"{a['first_name']}.{a['last_name']}"
+        for a in User.objects.filter(id__in={g.analytic_id for g in groups if g.analytic_id}).values('id', 'first_name', 'last_name')
+    }
+    
+    # Группируем
+    group_to_banks = {}
+    for group_id, bank_id in mappings:
+        if bank_id in banks_data:
+            group_to_banks.setdefault(group_id, []).append(banks_data[bank_id])
+    
+    # Формируем результат
+    report_data = [
+        (
+            group.group_number,
+            group.name,
+            bank['base_number'],
+            bank['name'],
+            category_map.get(bank['category'], '—'),
+            analysts.get(group.analytic_id, '—'),
+            YES if group.is_active else NO
+        )
+        for group in groups
+        for bank in group_to_banks.get(group.id, [])
+    ]
+    
+    return report_data
